@@ -425,9 +425,23 @@ function registerMessageHandler(client, pedidoPorCliente) {
           );
           return;
         }
-        pedidoPorCliente.set(chatId, { etapa: "aguardando_tamanho", comboId: combo.id, ultimaAtividade: Date.now() });
+        pedidoPorCliente.set(chatId, {
+          etapa: "aguardando_tamanho",
+          comboId: combo.id,
+          ultimaAtividade: Date.now(),
+        });
         await typing();
-        await client.sendMessage(chatId, `*${combo.nome}* – Qual tamanho? ${tamanhos.map((m) => m + "ml").join(" ou ")}`);
+        if (tamanhos.length === 2) {
+          await client.sendMessage(
+            chatId,
+            `*${combo.nome}* – Qual tamanho?\n\n1️⃣ ${tamanhos[0]}ml\n2️⃣ ${tamanhos[1]}ml\n\nResponda com 1 ou 2.`,
+          );
+        } else {
+          await client.sendMessage(
+            chatId,
+            `*${combo.nome}* – Qual tamanho? ${tamanhos.map((m) => m + "ml").join(" ou ")}`,
+          );
+        }
         return;
       }
 
@@ -439,6 +453,35 @@ function registerMessageHandler(client, pedidoPorCliente) {
           return;
         }
         const tamanhos = tamanhosDoCombo(combo);
+        const escolhaIdx =
+          tamanhos.length === 2 && (texto.trim() === "1" || texto.trim() === "2")
+            ? parseInt(texto.trim(), 10) - 1
+            : null;
+        if (escolhaIdx != null && tamanhos[escolhaIdx]) {
+          const mlEscolhido = tamanhos[escolhaIdx];
+          const tamanhoStr =
+            mlEscolhido === "300"
+              ? "300ml"
+              : mlEscolhido === "1000"
+                ? "1L"
+                : mlEscolhido === "700"
+                  ? "700ml"
+                  : mlEscolhido + "ml";
+          pedidoPorCliente.set(chatId, {
+            etapa: "aguardando_adicionais",
+            comboId: combo.id,
+            tamanho: tamanhoStr,
+            ml: mlEscolhido,
+            adicionaisAcumulados: [],
+            ultimaAtividade: Date.now(),
+          });
+          await typing();
+          await client.sendMessage(
+            chatId,
+            `*${combo.nome}* ${tamanhoStr} anotado.\n\nDeseja algum *adicional*?\n${textoAdicionaisMultilinha()}\n\nDigite os nomes ou *nenhum*.`,
+          );
+          return;
+        }
         const soTamanho = extrairSoTamanho(texto);
         const ml = soTamanho?.ml;
         if (ml && tamanhos.includes(ml)) {
@@ -457,7 +500,17 @@ function registerMessageHandler(client, pedidoPorCliente) {
           );
           return;
         }
-        await client.sendMessage(chatId, `Escolha o tamanho: ${tamanhos.map((m) => m + "ml").join(" ou ")}`);
+        if (tamanhos.length === 2) {
+          await client.sendMessage(
+            chatId,
+            `Escolha o tamanho:\n\n1️⃣ ${tamanhos[0]}ml\n2️⃣ ${tamanhos[1]}ml\n\nResponda com 1 ou 2.`,
+          );
+        } else {
+          await client.sendMessage(
+            chatId,
+            `Escolha o tamanho: ${tamanhos.map((m) => m + "ml").join(" ou ")}`,
+          );
+        }
         return;
       }
 
