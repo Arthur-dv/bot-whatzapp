@@ -1,0 +1,8 @@
+node_modules/
+.env
+.wwebjs_auth/
+pedidos/
+*.log
+logo.png
+cardapio.jpeg
+qrpix.jpeg
