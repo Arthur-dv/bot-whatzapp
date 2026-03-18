@@ -1,4 +1,4 @@
-# Bot WhatsApp – Amor, Alegria e Frutas
+# Bot WhatsApp
 
 Bot de atendimento e pedidos por WhatsApp para loja de açaí. O cliente faz o pedido pelo chat, informa endereço e pagamento, e a loja recebe o resumo e pode solicitar comprovante Pix.
 
