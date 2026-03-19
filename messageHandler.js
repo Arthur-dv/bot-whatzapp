@@ -39,8 +39,22 @@ const {
 } = mensagens;
 
 const { salvarPedido, atualizarStatusPedido } = pedidos;
+const {
+  interpretarPedidoComGemini,
+  interpretarIntencaoEPedidoComGemini,
+  ehSaudacaoOuQuerFalar,
+} = require("./gemini");
 
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
+
+function formatarWhatsAppId(raw) {
+  const v = (raw || "").trim();
+  if (!v) return "";
+  if (/@c\.us$|@s\.whatsapp\.net$/i.test(v)) return v;
+  const digits = v.replace(/\D/g, "");
+  if (!digits) return "";
+  return digits + "@c.us";
+}
 
 function menuTexto(saudacao, nome) {
   return (
@@ -102,8 +116,17 @@ function registerMessageHandler(client, pedidoPorCliente) {
       };
 
       const textoNorm = (textoLower || "").trim();
+      const textoNormSemAcento = textoNorm
+        .normalize("NFD")
+        .replace(/\p{M}/gu, "")
+        .replace(/\s+/g, " ")
+        .trim();
+      const listaSaudacao =
+        /^(menu|oi|0i|ola|bom dia|boa tarde|boa noite|opa|oie|oii|e ai|eae|fala|falai|fala ai|salve|blz|beleza|tudo bem\??|tudo bom\??)$/.test(
+          textoNormSemAcento
+        );
       const isSaudacaoOuMenu =
-        /^(menu|oi|0i|olá|ola|bom dia|boa tarde|boa noite)$/.test(textoNorm);
+        listaSaudacao || (textoNorm.length <= 80 && (await ehSaudacaoOuQuerFalar(textoNorm)));
 
       if (isSaudacaoOuMenu) {
         if (foraDoHorario()) {
@@ -280,12 +303,12 @@ function registerMessageHandler(client, pedidoPorCliente) {
           await typing();
           salvarPedido(pedido, chatId);
           if (WHATSAPP_ADMIN_ID) {
-            const idAdmin = /^\d+$/.test(WHATSAPP_ADMIN_ID.trim())
-              ? WHATSAPP_ADMIN_ID.trim() + "@c.us"
-              : WHATSAPP_ADMIN_ID.trim();
+            const idAdmin = formatarWhatsAppId(WHATSAPP_ADMIN_ID);
             try {
-              await client.sendMessage(idAdmin, textoResumoParaAdmin(pedido));
-            } catch (_) {}
+              if (idAdmin) await client.sendMessage(idAdmin, textoResumoParaAdmin(pedido));
+            } catch (err) {
+              console.error("Falha ao enviar pedido para WHATSAPP_ADMIN_ID:", err?.message || err);
+            }
           }
           const formaNorm = normalizar(pedido.formaPagamento || "");
           const ehPix = formaNorm.includes("pix");
@@ -360,10 +383,73 @@ function registerMessageHandler(client, pedidoPorCliente) {
       }
 
       if (estado?.etapa === "aguardando_pedido") {
-        const parsed = parsearPedidoCompleto(texto);
-        const combo = parsed?.combo || identificarCombo(texto);
+        const aiIntent = await interpretarIntencaoEPedidoComGemini(texto);
+        if (aiIntent?.intent === "saudacao") {
+          let nome = "cliente";
+          try {
+            const contact = await msg.getContact();
+            if (contact?.pushname) nome = contact.pushname.split(" ")[0] || nome;
+          } catch (_) {}
+          await typing();
+          await enviarMenu(client, chatId, chat, nome);
+          return;
+        }
+        if (aiIntent?.intent === "pedido" && Array.isArray(aiIntent.itens) && aiIntent.itens.length >= 1) {
+          let nomeCliente = "Cliente";
+          try {
+            const contact = await msg.getContact();
+            if (contact?.pushname) nomeCliente = contact.pushname;
+          } catch (_) {}
+          const itens = aiIntent.itens.map((i) => ({
+            ...i,
+            descricao: `${i.nome} ${i.tamanho}${i.itensComPreco?.length ? " + " + formatarLinhaAdicionais(i.itensComPreco) : ""}`,
+          }));
+          const ultimo = getUltimoEndereco(chatId);
+          if (ultimo) {
+            pedidoPorCliente.set(chatId, {
+              etapa: "aguardando_confirmar_endereco",
+              nome: nomeCliente,
+              itensDoPedido: itens,
+              ultimoEndereco: ultimo,
+              ultimaAtividade: Date.now(),
+            });
+            await client.sendMessage(
+              chatId,
+              "Já conheço você de atendimentos anteriores. 🙂\n\nSeu endereço: " +
+                ultimo +
+                "\n\nDeseja usar esse? 1️⃣ Sim / 2️⃣ Informar outro",
+            );
+            return;
+          }
+          pedidoPorCliente.set(chatId, {
+            etapa: "aguardando_endereco",
+            nome: nomeCliente,
+            itensDoPedido: itens,
+            ultimaAtividade: Date.now(),
+          });
+          await client.sendMessage(chatId, "Envie seu *endereço de entrega*.");
+          return;
+        }
+        let parsed = parsearPedidoCompleto(texto);
+        let combo = parsed?.combo || identificarCombo(texto);
         if (!combo) {
-          await client.sendMessage(chatId, "Não entendi. Digite o *número* (ex: 1️⃣, 2️⃣...) ou o nome do item.");
+          const geminiResult = await interpretarPedidoComGemini(texto);
+          if (geminiResult) {
+            parsed = geminiResult;
+            combo = geminiResult.combo;
+          }
+        }
+        if (!combo) {
+          if (aiIntent?.intent === "outro") {
+            await client.sendMessage(
+              chatId,
+              "Não identifiquei um pedido. Você pode:\n\n" +
+                "• Digite *menu* para ver opções (cardápio, endereço, horário)\n" +
+                `• Ou digite o *número* (1️⃣ a ${CARDAPIO.length}️⃣) ou *nome do item* para fazer seu pedido`,
+            );
+          } else {
+            await client.sendMessage(chatId, "Não entendi. Digite o *número* (ex: 1️⃣, 2️⃣...) ou o nome do item.");
+          }
           return;
         }
         const tamanhos = tamanhosDoCombo(combo);
