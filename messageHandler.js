@@ -46,10 +46,37 @@ const {
 } = require("./gemini");
 
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
+const filaPorChat = new Map();
+const mensagensRecentes = new Map();
+const DEDUPE_MS = Math.max(0, parseInt(process.env.MSG_DEDUPE_MS || "4000", 10) || 4000);
+
+function hashMensagem(msg) {
+  return `${msg?.from || ""}|${msg?.hasMedia ? "M" : "T"}|${(msg?.body || "")
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()}`;
+}
+
+function mensagemDuplicada(msg) {
+  const key = hashMensagem(msg);
+  if (!key) return false;
+  const agora = Date.now();
+  const ultimo = mensagensRecentes.get(key) || 0;
+  mensagensRecentes.set(key, agora);
+  if (mensagensRecentes.size > 5000) {
+    for (const [k, t] of mensagensRecentes) {
+      if (agora - t > DEDUPE_MS * 2) mensagensRecentes.delete(k);
+    }
+  }
+  return agora - ultimo <= DEDUPE_MS;
+}
 
 function formatarWhatsAppId(raw) {
   const v = (raw || "").trim();
   if (!v) return "";
+  if (/@g\.us$/i.test(v)) return "";
   if (/@c\.us$|@s\.whatsapp\.net$/i.test(v)) return v;
   const digits = v.replace(/\D/g, "");
   if (!digits) return "";
@@ -90,7 +117,17 @@ async function enviarMenu(client, chatId, chat, nome) {
 function registerMessageHandler(client, pedidoPorCliente) {
   client.on("message", async (msg) => {
     const chatId = msg.from;
+    const anterior = filaPorChat.get(chatId) || Promise.resolve();
+    let liberar;
+    const atual = new Promise((res) => {
+      liberar = res;
+    });
+    const marcador = anterior.finally(() => atual);
+    filaPorChat.set(chatId, marcador);
+    await anterior;
+
     try {
+      if (mensagemDuplicada(msg)) return;
       if (msg.fromMe) return;
       if (msg.isStatus) return;
       if (!chatId || chatId.endsWith("@g.us")) return;
@@ -289,6 +326,14 @@ function registerMessageHandler(client, pedidoPorCliente) {
           forma || "Pix",
           TEMPO_ENTREGA,
         );
+        if (!resumo) {
+          pedidoPorCliente.set(chatId, { etapa: "aguardando_pedido", ultimaAtividade: Date.now() });
+          await client.sendMessage(
+            chatId,
+            "Não consegui montar o resumo do pedido. Vamos tentar novamente: digite o *número* ou *nome do item*.",
+          );
+          return;
+        }
         await client.sendMessage(chatId, resumo);
         await client.sendMessage(chatId, "Está tudo correto?\n\n1️⃣ Confirmar\n2️⃣ Alterar");
         return;
@@ -305,7 +350,13 @@ function registerMessageHandler(client, pedidoPorCliente) {
           if (WHATSAPP_ADMIN_ID) {
             const idAdmin = formatarWhatsAppId(WHATSAPP_ADMIN_ID);
             try {
-              if (idAdmin) await client.sendMessage(idAdmin, textoResumoParaAdmin(pedido));
+              if (!idAdmin) {
+                console.error(
+                  "WHATSAPP_ADMIN_ID inválido. Use número com DDI/DDD (ex: 5511999999999) ou sufixo @c.us.",
+                );
+              } else {
+                await client.sendMessage(idAdmin, textoResumoParaAdmin(pedido));
+              }
             } catch (err) {
               console.error("Falha ao enviar pedido para WHATSAPP_ADMIN_ID:", err?.message || err);
             }
@@ -676,6 +727,9 @@ function registerMessageHandler(client, pedidoPorCliente) {
           "Algo deu errado no momento. Tente novamente ou digite *menu* para recomeçar.",
         );
       } catch (_) {}
+    } finally {
+      liberar();
+      if (filaPorChat.get(chatId) === marcador) filaPorChat.delete(chatId);
     }
   });
 }

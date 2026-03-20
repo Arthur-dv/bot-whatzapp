@@ -10,6 +10,10 @@ const CACHES = {
 };
 let genAIInstance = null;
 let modelInstance = null;
+const breaker = {
+  failures: 0,
+  openUntil: 0,
+};
 
 function envBool(name, fallback) {
   const v = (process.env[name] || "").trim().toLowerCase();
@@ -32,6 +36,8 @@ const CFG = {
   cacheMaxPedido: envInt("IA_CACHE_MAX_PEDIDO", 400),
   cacheMaxIntencao: envInt("IA_CACHE_MAX_INTENCAO", 400),
   cacheMaxSaudacao: envInt("IA_CACHE_MAX_SAUDACAO", 200),
+  breakerFailureThreshold: envInt("IA_BREAKER_FAILURE_THRESHOLD", 5),
+  breakerOpenMs: envInt("IA_BREAKER_OPEN_MS", 30000),
   logs: envBool("IA_LOGS", false),
   habilitaIntencao: envBool("IA_INTENCAO", true),
   habilitaMultiItem: envBool("IA_MULTI_ITEM", true),
@@ -155,6 +161,10 @@ async function comTimeout(promise, timeoutMs) {
 }
 
 async function callGeminiWithRetry(prompt, tipo) {
+  if (Date.now() < breaker.openUntil) {
+    logIa("breaker_open", { tipo, openUntil: breaker.openUntil });
+    return null;
+  }
   const model = getModel();
   if (!model) return null;
   let tentativa = 0;
@@ -162,12 +172,22 @@ async function callGeminiWithRetry(prompt, tipo) {
     try {
       const result = await comTimeout(model.generateContent(prompt), CFG.timeoutMs);
       const raw = result?.response?.text?.() || "";
+      breaker.failures = 0;
+      breaker.openUntil = 0;
       logIa("ok", { tipo, tentativa, chars: raw.length });
       return raw;
     } catch (err) {
       logIa("erro", { tipo, tentativa, erro: err?.message || "erro_desconhecido" });
       tentativa += 1;
-      if (tentativa > CFG.retryCount) return null;
+      if (tentativa > CFG.retryCount) {
+        breaker.failures += 1;
+        if (breaker.failures >= CFG.breakerFailureThreshold) {
+          breaker.openUntil = Date.now() + CFG.breakerOpenMs;
+          breaker.failures = 0;
+          logIa("breaker_trip", { tipo, openMs: CFG.breakerOpenMs });
+        }
+        return null;
+      }
     }
   }
   return null;
