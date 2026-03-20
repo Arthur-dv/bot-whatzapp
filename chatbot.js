@@ -40,4 +40,23 @@ client.on("auth_failure", (msg) => {
 
 registerMessageHandler(client, pedidoPorCliente);
 
-client.initialize();
+async function iniciarComRetry(tentativa = 1, maxTentativas = 3) {
+  try {
+    await client.initialize();
+  } catch (err) {
+    if (
+      (err?.message || "").includes("Execution context was destroyed") &&
+      tentativa < maxTentativas
+    ) {
+      console.log(`⚠️ Reiniciando... tentativa ${tentativa + 1}/${maxTentativas}`);
+      await new Promise((r) => setTimeout(r, 3000));
+      return iniciarComRetry(tentativa + 1, maxTentativas);
+    }
+    throw err;
+  }
+}
+
+iniciarComRetry().catch((err) => {
+  console.error("❌ Erro ao conectar:", err?.message || err);
+  process.exit(1);
+});
