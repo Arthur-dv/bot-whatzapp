@@ -2,6 +2,30 @@
 
 Bot de atendimento e pedidos por WhatsApp para loja de açaí. O cliente faz o pedido pelo chat, informa endereço e pagamento, e a loja recebe o resumo e pode solicitar comprovante Pix.
 
+## Modo Web (QR Code) vs API oficial (Cloud)
+
+| | `npm start` (`chatbot.js`) | `npm run start:cloud` (`chatbot-cloud.js`) |
+|--|-----------------------------|---------------------------------------------|
+| Conexão | Escaneia **QR Code** no terminal (WhatsApp Web) | **Sem QR**: número da loja na Meta + token + webhook |
+| Biblioteca | `whatsapp-web.js` + Puppeteer | HTTPS + Graph API (fetch) |
+| Uso | Bom para testes e MVPs | Melhor para produção e conformidade |
+
+**API oficial (Cloud):** no [Meta for Developers](https://developers.facebook.com/) crie um app com WhatsApp, obtenha **Phone number ID**, **Access token** (permanente ou de sistema), defina **Verify token** (uma string sua) e configure o webhook público `https://SEU_DOMINIO/webhook` com os mesmos dados. O servidor precisa ser acessível na internet (túnel tipo ngrok ou VPS).
+
+Variáveis no `.env` para Cloud:
+
+| Variável | Descrição |
+|----------|-----------|
+| `WHATSAPP_ACCESS_TOKEN` | Token Bearer da Graph API |
+| `WHATSAPP_PHONE_NUMBER_ID` | ID do número na Cloud API |
+| `WHATSAPP_VERIFY_TOKEN` | Mesmo valor cadastrado no webhook na Meta |
+| `WHATSAPP_APP_SECRET` | (Opcional) para validar assinatura `X-Hub-Signature-256` |
+| `WHATSAPP_CLOUD_PORT` | Porta local do servidor webhook (padrão 3000) |
+
+**Limitação atual no Cloud:** o webhook só processa mensagens de **texto**. Mídia (foto do comprovante Pix) pode ser adicionada depois.
+
+Requer **Node 18+** (uso de `fetch` / `Blob` no envio de imagens).
+
 ## Como rodar
 
 1. Instale as dependências:
@@ -52,7 +76,11 @@ Formato: `HORARIO_X=abre-fecha` em hora (0–23).
 
 ## Arquivos importantes
 
-- **`chatbot.js`** – Ponto de entrada: inicia o cliente WhatsApp e registra o handler de mensagens
+- **`chatbot.js`** – Ponto de entrada Web: QR Code + `whatsapp-web.js`
+- **`chatbot-cloud.js`** – Ponto de entrada API oficial: servidor webhook na porta configurada
+- **`cloudWebhook.js`** – Rotas GET/POST `/webhook` da Cloud API
+- **`whatsappCloudApi.js`** – Chamadas Graph API (texto e imagem local)
+- **`webJsTransport.js`** – Envio de mensagens via `whatsapp-web.js`
 - **`config.js`** – Variáveis de ambiente, caminhos (logo, cardápio, QR Pix), horário, endereço salvo
 - **`cardapio.js`** – Dados do cardápio e adicionais
 - **`parseadores.js`** – Funções que interpretam texto (combo, tamanho, adicionais, endereço, pagamento)

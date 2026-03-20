@@ -3,11 +3,13 @@
   "version": "1.0.0",
   "main": "chatbot.js",
   "scripts": {
-    "start": "node chatbot.js"
+    "start": "node chatbot.js",
+    "start:cloud": "node chatbot-cloud.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "dotenv": "^16.4.5",
+    "express": "^5.2.1",
     "fuzzball": "^2.2.3",
     "moment-timezone": "^0.5.45",
     "openai": "^4.78.1",

@@ -1,4 +1,3 @@
-const { MessageMedia } = require("whatsapp-web.js");
 const config = require("./config");
 const { CARDAPIO } = require("./cardapio");
 const parseadores = require("./parseadores");
@@ -96,7 +95,7 @@ function menuTexto(saudacao, nome) {
   );
 }
 
-async function enviarMenu(client, chatId, chat, nome) {
+async function enviarMenu(transport, chatId, chat, nome) {
   const hora = new Date().getHours();
   let saudacao = "Olá";
   if (hora >= 5 && hora < 12) saudacao = "Bom dia";
@@ -106,28 +105,26 @@ async function enviarMenu(client, chatId, chat, nome) {
   const msgMenu = menuTexto(saudacao, nome);
   if (fs.existsSync(CAMINHO_LOGO)) {
     try {
-      const media = MessageMedia.fromFilePath(CAMINHO_LOGO);
-      await client.sendMessage(chatId, media, { caption: msgMenu });
+      await transport.send(chatId, { imagePath: CAMINHO_LOGO, caption: msgMenu });
       return;
     } catch (_) {}
   }
-  await client.sendMessage(chatId, msgMenu);
+  await transport.send(chatId, msgMenu);
 }
 
-function registerMessageHandler(client, pedidoPorCliente) {
-  client.on("message", async (msg) => {
-    const chatId = msg.from;
-    const anterior = filaPorChat.get(chatId) || Promise.resolve();
-    let liberar;
-    const atual = new Promise((res) => {
-      liberar = res;
-    });
-    const marcador = anterior.finally(() => atual);
-    filaPorChat.set(chatId, marcador);
-    await anterior;
+async function processInboundMessage(transport, pedidoPorCliente, msg) {
+  const chatId = msg.from;
+  const anterior = filaPorChat.get(chatId) || Promise.resolve();
+  let liberar;
+  const atual = new Promise((res) => {
+    liberar = res;
+  });
+  const marcador = anterior.finally(() => atual);
+  filaPorChat.set(chatId, marcador);
+  await anterior;
 
-    try {
-      if (mensagemDuplicada(msg)) return;
+  try {
+    if (mensagemDuplicada(msg)) return;
       if (msg.fromMe) return;
       if (msg.isStatus) return;
       if (!chatId || chatId.endsWith("@g.us")) return;
@@ -138,7 +135,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
       const texto = (msg.body || "").trim();
       const textoLower = texto.toLowerCase();
       if (!texto && (msg.hasMedia || !(msg.body || "").trim())) {
-        await client.sendMessage(
+        await transport.send(
           chatId,
           "Não consegui entender. Evite enviar áudios ou arquivos – por favor, *digite* sua mensagem.\n\nSe quiser fazer um pedido ou ver opções, digite *menu* ou *oi*.",
         );
@@ -168,7 +165,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
       if (isSaudacaoOuMenu) {
         if (foraDoHorario()) {
           await typing();
-          await client.sendMessage(
+          await transport.send(
             chatId,
             "🕐 No momento estamos *fechados*.\n\n*Horário de funcionamento:*\n\n" +
               HORARIO_TEXTO,
@@ -182,7 +179,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
           if (contact?.pushname) nome = contact.pushname.split(" ")[0] || nome;
         } catch (_) {}
         await typing();
-        await enviarMenu(client, chatId, chat, nome);
+        await enviarMenu(transport, chatId, chat, nome);
         return;
       }
 
@@ -194,7 +191,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
           Date.now() - ultima > TIMEOUT_INATIVIDADE_MIN * 60 * 1000
         ) {
           pedidoPorCliente.delete(chatId);
-          await client.sendMessage(
+          await transport.send(
             chatId,
             "⏱️ Seu pedido expirou por inatividade. Digite *menu* ou *oi* para começar novamente.",
           );
@@ -212,13 +209,13 @@ function registerMessageHandler(client, pedidoPorCliente) {
           atualizarStatusPedido(chatId, "comprovante_enviado");
           pedidoPorCliente.delete(chatId);
           await typing();
-          await client.sendMessage(
+          await transport.send(
             chatId,
             "✅ *Comprovante recebido!*\n\nSeu pedido está sendo preparado.",
           );
           return;
         }
-        await client.sendMessage(
+        await transport.send(
           chatId,
           "Envie o *comprovante* do Pix (foto ou documento) ou digite *pago*.",
         );
@@ -234,7 +231,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
             ultimaAtividade: Date.now(),
           });
           await typing();
-          await client.sendMessage(
+          await transport.send(
             chatId,
             "Qual a *forma de pagamento*? (Pix, Dinheiro ou Cartão)",
           );
@@ -247,10 +244,10 @@ function registerMessageHandler(client, pedidoPorCliente) {
             ultimaAtividade: Date.now(),
           });
           await typing();
-          await client.sendMessage(chatId, "Envie o *endereço de entrega*.");
+          await transport.send(chatId, "Envie o *endereço de entrega*.");
           return;
         }
-        await client.sendMessage(
+        await transport.send(
           chatId,
           "Digite 1️⃣ para usar o endereço salvo ou 2️⃣ para informar outro.",
         );
@@ -260,7 +257,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
       if (estado?.etapa === "aguardando_novo_endereco") {
         const endereco = texto.trim();
         if (!endereco) {
-          await client.sendMessage(chatId, "Envie o endereço completo.");
+          await transport.send(chatId, "Envie o endereço completo.");
           return;
         }
         pedidoPorCliente.set(chatId, {
@@ -270,7 +267,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
           ultimaAtividade: Date.now(),
         });
         await typing();
-        await client.sendMessage(
+        await transport.send(
           chatId,
           "Qual a *forma de pagamento*? (Pix, Dinheiro ou Cartão)",
         );
@@ -280,7 +277,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
       if (estado?.etapa === "aguardando_endereco") {
         const endereco = texto.trim();
         if (!endereco) {
-          await client.sendMessage(chatId, "Envie o endereço completo.");
+          await transport.send(chatId, "Envie o endereço completo.");
           return;
         }
         pedidoPorCliente.set(chatId, {
@@ -290,7 +287,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
           ultimaAtividade: Date.now(),
         });
         await typing();
-        await client.sendMessage(
+        await transport.send(
           chatId,
           "Qual a *forma de pagamento*? (Pix, Dinheiro ou Cartão)",
         );
@@ -328,14 +325,14 @@ function registerMessageHandler(client, pedidoPorCliente) {
         );
         if (!resumo) {
           pedidoPorCliente.set(chatId, { etapa: "aguardando_pedido", ultimaAtividade: Date.now() });
-          await client.sendMessage(
+          await transport.send(
             chatId,
             "Não consegui montar o resumo do pedido. Vamos tentar novamente: digite o *número* ou *nome do item*.",
           );
           return;
         }
-        await client.sendMessage(chatId, resumo);
-        await client.sendMessage(chatId, "Está tudo correto?\n\n1️⃣ Confirmar\n2️⃣ Alterar");
+        await transport.send(chatId, resumo);
+        await transport.send(chatId, "Está tudo correto?\n\n1️⃣ Confirmar\n2️⃣ Alterar");
         return;
       }
 
@@ -355,7 +352,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
                   "WHATSAPP_ADMIN_ID inválido. Use número com DDI/DDD (ex: 5511999999999) ou sufixo @c.us.",
                 );
               } else {
-                await client.sendMessage(idAdmin, textoResumoParaAdmin(pedido));
+                await transport.send(idAdmin, textoResumoParaAdmin(pedido));
               }
             } catch (err) {
               console.error("Falha ao enviar pedido para WHATSAPP_ADMIN_ID:", err?.message || err);
@@ -365,13 +362,13 @@ function registerMessageHandler(client, pedidoPorCliente) {
           const ehPix = formaNorm.includes("pix");
           if (ehPix && fs.existsSync(CAMINHO_QR_PIX)) {
             try {
-              const media = MessageMedia.fromFilePath(CAMINHO_QR_PIX);
-              await client.sendMessage(chatId, media, {
+              await transport.send(chatId, {
+                imagePath: CAMINHO_QR_PIX,
                 caption:
                   "✅ *Pedido confirmado!*\n\nPague no Pix e envie o comprovante aqui.",
               });
             } catch (_) {
-              await client.sendMessage(
+              await transport.send(
                 chatId,
                 "✅ *Pedido confirmado!* Pague no Pix e envie o comprovante aqui.",
               );
@@ -383,16 +380,16 @@ function registerMessageHandler(client, pedidoPorCliente) {
             });
             return;
           }
-          await client.sendMessage(chatId, "✅ *Pedido confirmado!*");
+          await transport.send(chatId, "✅ *Pedido confirmado!*");
           pedidoPorCliente.delete(chatId);
           return;
         }
         if (alterar) {
           pedidoPorCliente.delete(chatId);
-          await client.sendMessage(chatId, "Ok! Digite *menu* para recomeçar o pedido.");
+          await transport.send(chatId, "Ok! Digite *menu* para recomeçar o pedido.");
           return;
         }
-        await client.sendMessage(chatId, "Digite 1️⃣ para confirmar ou 2️⃣ para alterar.");
+        await transport.send(chatId, "Digite 1️⃣ para confirmar ou 2️⃣ para alterar.");
         return;
       }
 
@@ -400,32 +397,32 @@ function registerMessageHandler(client, pedidoPorCliente) {
         await typing();
         if (CAMINHO_IMAGEM_CARDAPIO && fs.existsSync(CAMINHO_IMAGEM_CARDAPIO)) {
           try {
-            const media = MessageMedia.fromFilePath(CAMINHO_IMAGEM_CARDAPIO);
-            await client.sendMessage(chatId, media, {
+            await transport.send(chatId, {
+              imagePath: CAMINHO_IMAGEM_CARDAPIO,
               caption: "🍇 *Cardápio* – Confira nossas opções!",
             });
           } catch (_) {}
         }
-        await client.sendMessage(chatId, "Digite 4️⃣ para fazer seu pedido.");
+        await transport.send(chatId, "Digite 4️⃣ para fazer seu pedido.");
         return;
       }
 
       if (!estado?.etapa && texto === "2") {
         await typing();
-        await client.sendMessage(chatId, "📍 *ENDEREÇO*\n\n" + ENDERECO_TEXTO);
+        await transport.send(chatId, "📍 *ENDEREÇO*\n\n" + ENDERECO_TEXTO);
         return;
       }
 
       if (!estado?.etapa && texto === "3") {
         await typing();
-        await client.sendMessage(chatId, "🕐 *HORÁRIO*\n\n" + HORARIO_TEXTO);
+        await transport.send(chatId, "🕐 *HORÁRIO*\n\n" + HORARIO_TEXTO);
         return;
       }
 
       if (!estado?.etapa && texto === "4") {
         pedidoPorCliente.set(chatId, { etapa: "aguardando_pedido", ultimaAtividade: Date.now() });
         await typing();
-        await client.sendMessage(
+        await transport.send(
           chatId,
           "🛒 *FAZER PEDIDO*\n\nDigite o *número* ou *nome do item*:\n\n" +
             CARDAPIO.map((c, i) => `${i + 1}️⃣ ${c.nome}`).join("\n"),
@@ -442,7 +439,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
             if (contact?.pushname) nome = contact.pushname.split(" ")[0] || nome;
           } catch (_) {}
           await typing();
-          await enviarMenu(client, chatId, chat, nome);
+          await enviarMenu(transport, chatId, chat, nome);
           return;
         }
         if (aiIntent?.intent === "pedido" && Array.isArray(aiIntent.itens) && aiIntent.itens.length >= 1) {
@@ -464,7 +461,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
               ultimoEndereco: ultimo,
               ultimaAtividade: Date.now(),
             });
-            await client.sendMessage(
+            await transport.send(
               chatId,
               "Já conheço você de atendimentos anteriores. 🙂\n\nSeu endereço: " +
                 ultimo +
@@ -478,7 +475,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
             itensDoPedido: itens,
             ultimaAtividade: Date.now(),
           });
-          await client.sendMessage(chatId, "Envie seu *endereço de entrega*.");
+          await transport.send(chatId, "Envie seu *endereço de entrega*.");
           return;
         }
         let parsed = parsearPedidoCompleto(texto);
@@ -492,14 +489,14 @@ function registerMessageHandler(client, pedidoPorCliente) {
         }
         if (!combo) {
           if (aiIntent?.intent === "outro") {
-            await client.sendMessage(
+            await transport.send(
               chatId,
               "Não identifiquei um pedido. Você pode:\n\n" +
                 "• Digite *menu* para ver opções (cardápio, endereço, horário)\n" +
                 `• Ou digite o *número* (1️⃣ a ${CARDAPIO.length}️⃣) ou *nome do item* para fazer seu pedido`,
             );
           } else {
-            await client.sendMessage(chatId, "Não entendi. Digite o *número* (ex: 1️⃣, 2️⃣...) ou o nome do item.");
+            await transport.send(chatId, "Não entendi. Digite o *número* (ex: 1️⃣, 2️⃣...) ou o nome do item.");
           }
           return;
         }
@@ -527,7 +524,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
               ultimoEndereco: ultimo,
               ultimaAtividade: Date.now(),
             });
-            await client.sendMessage(
+            await transport.send(
               chatId,
               "Já conheço você de atendimentos anteriores. 🙂\n\nSeu endereço: " +
                 ultimo +
@@ -542,7 +539,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
             itensDoPedido: [item],
             ultimaAtividade: Date.now(),
           });
-          await client.sendMessage(chatId, "Envie seu *endereço de entrega*.");
+          await transport.send(chatId, "Envie seu *endereço de entrega*.");
           return;
         }
         if (tamanhos.length === 1) {
@@ -556,7 +553,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
             ultimaAtividade: Date.now(),
           });
           await typing();
-          await client.sendMessage(
+          await transport.send(
             chatId,
             `*${combo.nome}* anotado.\n\nDeseja algum *adicional*?\n${textoAdicionaisMultilinha()}\n\nDigite os nomes ou *nenhum*.`,
           );
@@ -569,12 +566,12 @@ function registerMessageHandler(client, pedidoPorCliente) {
         });
         await typing();
         if (tamanhos.length === 2) {
-          await client.sendMessage(
+          await transport.send(
             chatId,
             `*${combo.nome}* – Qual tamanho?\n\n1️⃣ ${tamanhos[0]}ml\n2️⃣ ${tamanhos[1]}ml\n\nResponda com 1 ou 2.`,
           );
         } else {
-          await client.sendMessage(
+          await transport.send(
             chatId,
             `*${combo.nome}* – Qual tamanho? ${tamanhos.map((m) => m + "ml").join(" ou ")}`,
           );
@@ -586,7 +583,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
         const combo = CARDAPIO.find((c) => c.id === estado.comboId);
         if (!combo) {
           pedidoPorCliente.set(chatId, { etapa: "aguardando_pedido", ultimaAtividade: Date.now() });
-          await client.sendMessage(chatId, "Digite o item novamente.");
+          await transport.send(chatId, "Digite o item novamente.");
           return;
         }
         const tamanhos = tamanhosDoCombo(combo);
@@ -613,7 +610,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
             ultimaAtividade: Date.now(),
           });
           await typing();
-          await client.sendMessage(
+          await transport.send(
             chatId,
             `*${combo.nome}* ${tamanhoStr} anotado.\n\nDeseja algum *adicional*?\n${textoAdicionaisMultilinha()}\n\nDigite os nomes ou *nenhum*.`,
           );
@@ -631,19 +628,19 @@ function registerMessageHandler(client, pedidoPorCliente) {
             ultimaAtividade: Date.now(),
           });
           await typing();
-          await client.sendMessage(
+          await transport.send(
             chatId,
             `*${combo.nome}* ${soTamanho.tamanho} anotado.\n\nDeseja algum *adicional*?\n${textoAdicionaisMultilinha()}\n\nDigite os nomes ou *nenhum*.`,
           );
           return;
         }
         if (tamanhos.length === 2) {
-          await client.sendMessage(
+          await transport.send(
             chatId,
             `Escolha o tamanho:\n\n1️⃣ ${tamanhos[0]}ml\n2️⃣ ${tamanhos[1]}ml\n\nResponda com 1 ou 2.`,
           );
         } else {
-          await client.sendMessage(
+          await transport.send(
             chatId,
             `Escolha o tamanho: ${tamanhos.map((m) => m + "ml").join(" ou ")}`,
           );
@@ -655,7 +652,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
         const combo = CARDAPIO.find((c) => c.id === estado.comboId);
         if (!combo) {
           pedidoPorCliente.set(chatId, { etapa: "aguardando_pedido", ultimaAtividade: Date.now() });
-          await client.sendMessage(chatId, "Digite o item novamente.");
+          await transport.send(chatId, "Digite o item novamente.");
           return;
         }
         const acumulados = estado.adicionaisAcumulados || [];
@@ -689,7 +686,7 @@ function registerMessageHandler(client, pedidoPorCliente) {
               ultimoEndereco: ultimo,
               ultimaAtividade: Date.now(),
             });
-            await client.sendMessage(
+            await transport.send(
               chatId,
               "Já conheço você de atendimentos anteriores. 🙂\n\nSeu endereço: " +
                 ultimo +
@@ -704,25 +701,25 @@ function registerMessageHandler(client, pedidoPorCliente) {
             itensDoPedido: [item],
             ultimaAtividade: Date.now(),
           });
-          await client.sendMessage(chatId, "Envie seu *endereço de entrega*.");
+          await transport.send(chatId, "Envie seu *endereço de entrega*.");
           return;
         }
 
         const { itensComPreco: novos } = parsearAdicionais(texto);
         if (!novos || novos.length === 0) {
-          await client.sendMessage(chatId, "Não entendi. Digite os *nomes* dos adicionais ou *nenhum*.");
+          await transport.send(chatId, "Não entendi. Digite os *nomes* dos adicionais ou *nenhum*.");
           return;
         }
         pedidoPorCliente.set(chatId, { ...estado, adicionaisAcumulados: [...acumulados, ...novos], ultimaAtividade: Date.now() });
-        await client.sendMessage(chatId, "Anotado. Quer mais algum adicional? (ou *nenhum*)");
+        await transport.send(chatId, "Anotado. Quer mais algum adicional? (ou *nenhum*)");
         return;
       }
 
-      await client.sendMessage(chatId, "Não entendi. Digite *menu* ou *oi*.");
+      await transport.send(chatId, "Não entendi. Digite *menu* ou *oi*.");
     } catch (error) {
       console.error("❌ Erro no processamento da mensagem:", error);
       try {
-        await client.sendMessage(
+        await transport.send(
           chatId,
           "Algo deu errado no momento. Tente novamente ou digite *menu* para recomeçar.",
         );
@@ -731,7 +728,14 @@ function registerMessageHandler(client, pedidoPorCliente) {
       liberar();
       if (filaPorChat.get(chatId) === marcador) filaPorChat.delete(chatId);
     }
+}
+
+function registerMessageHandler(client, pedidoPorCliente) {
+  const { createWebJsTransport } = require("./webJsTransport");
+  const transport = createWebJsTransport(client);
+  client.on("message", async (msg) => {
+    await processInboundMessage(transport, pedidoPorCliente, msg);
   });
 }
 
-module.exports = { registerMessageHandler };
+module.exports = { registerMessageHandler, processInboundMessage };
